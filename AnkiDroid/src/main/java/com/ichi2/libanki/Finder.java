@@ -35,6 +35,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Locale;
@@ -233,7 +234,7 @@ public class Finder {
         public boolean join;
         public String q = "";
         public boolean bad;
-        
+
         public void add(String txt) {
             add(txt, true);
         }
@@ -275,8 +276,10 @@ public class Finder {
 
 
     public Pair<String, String[]> _where(String[] tokens) {
+        Timber.d("start internal _where");// to measure time @TODO please remove it if this request is merged
         // state and query
         SearchState s = new SearchState();
+        ArrayList<Pair<String, String>> field_cmds = new ArrayList<>();
         List<String> args = new ArrayList<>();
         for (String token : tokens) {
             if (s.bad) {
@@ -297,7 +300,7 @@ public class Finder {
                 String[] spl = token.split(":", 2);
                 String cmd = spl[0].toLowerCase(Locale.US);
                 String val = spl[1];
-                
+
                 if (cmd.equals("added")) {
                     s.add(_findAdded(val));
                 } else if (cmd.equals("card")) {
@@ -323,16 +326,22 @@ public class Finder {
                 } else if (cmd.equals("is")) {
                     s.add(_findCardState(val));
                 } else {
-                    s.add(_findField(cmd, val));
+                    field_cmds.add(new Pair<>(cmd, val));
+                    //s.add(_findField(cmd, val));
                 }
             // normal text search
             } else {
                 s.add(_findText(token, args));
             }
         }
+        if (!field_cmds.isEmpty()) {
+            s.add(_findFields(field_cmds));
+        }
+
         if (s.bad) {
             return new Pair<>(null, null);
         }
+        Timber.d("end internal _where");// to measure time @TODO please remove it if this request is merged
         return new Pair<>(s.q, args.toArray(new String[args.size()]));
     }
 
@@ -373,7 +382,6 @@ public class Finder {
      * The python code combines all code paths in one function. In Java, we must overload the method
      * in order to consume either a String (no order, custom order) or a Boolean (no order, built-in order).
      */
-    
     private Pair<String, Boolean> _order(String order) {
         if (TextUtils.isEmpty(order)) {
             return _order(false);
@@ -382,7 +390,7 @@ public class Finder {
             return new Pair<>(" order by " + order, false);
         }
     }
-    
+
     private Pair<String, Boolean> _order(Boolean order) {
         if (!order) {
             return new Pair<>("", false);
@@ -415,8 +423,8 @@ public class Finder {
                 }
             }
             if (sort == null) {
-            	// deck has invalid sort order; revert to noteCrt
-            	sort = "n.id, c.ord";
+                // deck has invalid sort order; revert to noteCrt
+                sort = "n.id, c.ord";
             }
             boolean sortBackwards = mCol.getConf().getBoolean("sortBackwards");
             return new Pair<>(" ORDER BY " + sort, sortBackwards);
@@ -520,7 +528,7 @@ public class Finder {
         try {
             if (prop.equals("ease")) {
                 // LibAnki does this below, but we do it here to avoid keeping a separate float value.
-                val = (int)(Double.parseDouble(sval) * 1000);
+                val = (int) (Double.parseDouble(sval) * 1000);
             } else {
                 val = Integer.parseInt(sval);
             }
@@ -684,15 +692,190 @@ public class Finder {
         return TextUtils.join(" or ", lims.toArray(new String[lims.size()]));
     }
 
+    /**
+     * utility class to get combination of fields
+     */
+    private ArrayList<String[]> _mapCombination(Map<String, ArrayList<String>> _fields) {
+        ArrayList<String[]> res = new ArrayList<>();
+        int _size = 1;
+        int _nfields = _fields.size();
+        for (ArrayList<String> e : _fields.values()) {
+            _size *= e.size();
+        }
+        for (int i_size = 0; i_size < _size; i_size++) {
+            res.add(new String[_nfields]);
+        }
 
+        String[] _keys = _fields.keySet().toArray(new String[_fields.keySet().size()]); // should be the same....
+
+        int _repeat_size = _size;
+        for (int i_field = 0; i_field < _nfields; i_field++) {
+            int n_values = (_fields.get(_keys[i_field])).size();
+            // for each field
+            for (int i_value = 0, l = n_values; i_value < l; i_value++) {
+                //for each value
+                for (int i_repeat = 0, n_repeat = _size / _repeat_size; i_repeat < n_repeat; i_repeat++) {
+                    for (int i_chunk = 0, _chunk_size = (_repeat_size / n_values); i_chunk < _chunk_size; i_chunk++) {
+
+                        res.get(i_chunk + _chunk_size * i_value + i_repeat * _repeat_size)[i_field] = _fields.get(_keys[i_field]).get(i_value);
+                    }
+                }
+            }
+            _repeat_size /= n_values; // total times
+        }
+        return res;
+    }
+
+    /**
+     * to solve the perfomance problem when field related anki-filter-query comes, it will convert multiple query into once.
+     * @param field_cmds
+     * @return
+     */
+    private String _findFields(ArrayList<Pair<String, String>> field_cmds) {
+        // @TODO order of fields
+        Timber.d("start _findFields");
+
+        Map<Long, int[]> mods = new HashMap<>(); // model-card
+    //        Map<Long, int[]> modflds = new HashMap<>(); // model-query-fields
+        // key field name
+        // value possible values in the field
+        Map<String, ArrayList<String>> _fields = new LinkedHashMap<>();
+        // @TODO validate if a field exists or not
+        // value first if the field doesn't exist among all the model, it will be false ( can be used for UX ...?)
+
+        // store field-value map
+        for (int fci = 0, l = field_cmds.size(); fci < l; fci++) {
+            Pair<String, String> f_cmd = field_cmds.get(fci);
+        /*
+         * We need two expressions to query the cards: One that will use JAVA REGEX syntax and another
+         * that should use SQLITE LIKE clause syntax.
+         */
+            if (!_fields.containsKey(f_cmd.first)) {
+                _fields.put(f_cmd.first, new ArrayList<String>());
+            }
+            _fields.get(f_cmd.first).add(
+                    f_cmd.second.replace("%", "\\%") // For SQLITE, we escape all % signs
+                            .replace("*", "%") // And then convert the * into non-escaped % signs
+            );
+        }
+
+        // field keys array
+        String[] _field_keys = _fields.keySet().toArray(new String[_fields.keySet().size()]);
+
+        // generate model-field map
+        for (int fci = 0, l = _field_keys.length; fci < l; fci++) {
+            try {
+                for (JSONObject m : mCol.getModels().all()) {
+                    JSONArray flds = m.getJSONArray("flds");
+                    for (int fi = 0; fi < flds.length(); ++fi) {
+                        JSONObject f = flds.getJSONObject(fi);
+                        if (f.getString("name").equalsIgnoreCase(_field_keys[fci])) {
+                            if (!(mods.containsKey(m.getLong("id")))) {
+
+                                int[] m_mods = new int[flds.length()];
+                                for (int m_mfi = 0; m_mfi < m_mods.length; m_mfi++) {
+                                    m_mods[m_mfi] = -1;
+                                }
+                                mods.put(m.getLong("id"), m_mods);
+
+//                                int[] m_mflds = new int[l];
+//                                for (int m_fi = 0; m_fi < m_mflds.length; m_fi++) {
+//                                    m_mflds[m_fi] = -1;
+//                                }
+//                                modflds.put(m.getLong("id"), m_mflds);
+                            }
+                            mods.get(m.getLong("id"))[f.getInt("ord")] = fci; // card -> field index
+//                            modflds.get(m.getLong("id"))[fci] = f.getInt("ord"); // field -> card index
+                        }
+                    }
+                }
+            } catch (JSONException e) {
+                throw new RuntimeException(e);
+            }
+        }
+        Timber.d("end _findFields model");
+        if (mods.isEmpty()) {
+            // nothing has that field
+            return null;
+        }
+
+        // generate field-combination
+        ArrayList<String[]> field_comb = _mapCombination(_fields);
+
+        // generate model-field combination
+
+        // generate query
+        String rawSql = "select id, mid from notes where ";
+        final String F_DEL = "||CHAR(31)||";
+        final String SQL_DEL = " or ";
+        ArrayList<String> sqlVals = new ArrayList<String>();
+        for (Map.Entry<Long, int[]> e : mods.entrySet()) {
+            for (int i_flds_cmb = 0, n_flds_cmb = field_comb.size(); i_flds_cmb < n_flds_cmb; i_flds_cmb++) {
+                rawSql += "( mid = ? and flds like ";
+                int[] m_flds = e.getValue();
+                sqlVals.add(e.getKey().toString());
+                // the query is generated based on model->flds order
+                for (int m_fld_i = 0; m_fld_i < m_flds.length; m_fld_i++) {
+                    if (m_flds[m_fld_i] >= 0) {
+                        sqlVals.add(field_comb.get(i_flds_cmb)[m_flds[m_fld_i]]); // delimiter is 13
+                    } else {
+                        sqlVals.add("%");
+                    }
+                    rawSql += "?" + F_DEL;
+                }
+                rawSql = rawSql.substring(0, rawSql.length() - F_DEL.length());
+                rawSql += " escape '\\' ) or ";
+            }
+        }
+        rawSql = rawSql.substring(0, rawSql.length() - SQL_DEL.length()); // remove last ' or ' (length: 4)
+
+        LinkedList<Long> nids = new LinkedList<>();
+        Cursor cur = null;
+        Timber.d("start _findFields sqlquery");
+        try {
+            /*
+             * Here we use the sqlVal expression, that is required for LIKE syntax in sqllite.
+             * There is no problem with special characters, because only % and _ are special
+             * characters in this syntax.
+             */
+            String[] sqlVal = new String[sqlVals.size()];
+            sqlVal = sqlVals.toArray(sqlVal);
+            cur = mCol.getDb().getDatabase().rawQuery(rawSql, sqlVal);
+
+            while (cur.moveToNext()) {
+                nids.add(cur.getLong(0));
+            }
+        } finally {
+            if (cur != null) {
+                cur.close();
+            }
+        }
+        Timber.d("end _findFields sqlquery");
+        if (nids.isEmpty()) {
+            return "0";
+        }
+        return "n.id in " + Utils.ids2str(nids);
+    }
+
+
+    /**
+     * To limit note-id,this create sql from one Anki-filter-query that filter by Field ( specified in the Note.
+     * @Warning when data is really big like 100M, this part will be bottle-neck.
+     * @param field
+     * @param val
+     * @return
+     * @TODO tunes.
+     * @DONE to make clear why it also runs query
+     */
     private String _findField(String field, String val) {
+        Timber.d("start _findField");
         /*
          * We need two expressions to query the cards: One that will use JAVA REGEX syntax and another
          * that should use SQLITE LIKE clause syntax.
          */
         String sqlVal = val
-                .replace("%","\\%") // For SQLITE, we escape all % signs
-                .replace("*","%"); // And then convert the * into non-escaped % signs
+                .replace("%", "\\%") // For SQLITE, we escape all % signs
+                .replace("*", "%"); // And then convert the * into non-escaped % signs
 
         /*
          * The following three lines make sure that only _ and * are valid wildcards.
@@ -700,34 +883,36 @@ public class Finder {
          * all meta-characters in between them to lose their special meaning
          */
         String javaVal = val
-                    .replace("_","\\E.\\Q")
-                    .replace("*","\\E.*\\Q");
+                .replace("_", "\\E.\\Q")
+                .replace("*", "\\E.*\\Q");
         /*
          * For the pattern, we use the javaVal expression that uses JAVA REGEX syntax
          */
-        Pattern pattern = Pattern.compile("\\Q" + javaVal + "\\E", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
-
+        Pattern pattern = Pattern.compile("\\Q" + javaVal + "\\E", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);//@TODO not yet understand
+        Timber.d("start _findField model");
         // find models that have that field
         Map<Long, Object[]> mods = new HashMap<>();
         try {
-            for (JSONObject m : mCol.getModels().all()) {
+            for (JSONObject m : mCol.getModels().all()) { // @FIXME a lot of query....
                 JSONArray flds = m.getJSONArray("flds");
                 for (int fi = 0; fi < flds.length(); ++fi) {
                     JSONObject f = flds.getJSONObject(fi);
                     if (f.getString("name").equalsIgnoreCase(field)) {
-                        mods.put(m.getLong("id"), new Object[] { m, f.getInt("ord") });
+                        mods.put(m.getLong("id"), new Object[]{m, f.getInt("ord")});
                     }
                 }
             }
         } catch (JSONException e) {
             throw new RuntimeException(e);
         }
+        Timber.d("end _findField model");
         if (mods.isEmpty()) {
             // nothing has that field
             return null;
         }
         LinkedList<Long> nids = new LinkedList<>();
         Cursor cur = null;
+        Timber.d("start _findField sqlquery");
         try {
             /*
              * Here we use the sqlVal expression, that is required for LIKE syntax in sqllite.
@@ -737,13 +922,17 @@ public class Finder {
             cur = mCol.getDb().getDatabase().rawQuery(
                     "select id, mid, flds from notes where mid in " +
                             Utils.ids2str(new LinkedList<>(mods.keySet())) +
-                            " and flds like ? escape '\\'", new String[] { "%" + sqlVal + "%" });
+                            " and flds like ? escape '\\' ", new String[]{"%" + sqlVal + "%"});
+            String d_query = new String("query : " +
+                    "select id, mid, flds from notes where mid in " +
+                    Utils.ids2str(new LinkedList<>(mods.keySet())) +
+                    " and flds like " + "%" + sqlVal + "%" + " escape '\\'");
 
             while (cur.moveToNext()) {
                 String[] flds = Utils.splitFields(cur.getString(2));
-                int ord = (Integer)mods.get(cur.getLong(1))[1];
+                int ord = (Integer) mods.get(cur.getLong(1))[1];
                 String strg = flds[ord];
-                if (pattern.matcher(strg).matches()) {
+                if (pattern.matcher(strg).matches()) {//@TODO not yet understand... why do we need to match in application layer again ...?
                     nids.add(cur.getLong(0));
                 }
             }
@@ -752,6 +941,7 @@ public class Finder {
                 cur.close();
             }
         }
+        Timber.d("end _findField sqlquery");
         if (nids.isEmpty()) {
             return "0";
         }
@@ -773,7 +963,7 @@ public class Finder {
         try {
             cur = mCol.getDb().getDatabase().rawQuery(
                     "select id, flds from notes where mid=? and csum=?",
-                    new String[] { mid, csum });
+                    new String[]{mid, csum});
             long nid = cur.getLong(0);
             String flds = cur.getString(1);
             if (Utils.stripHTMLMedia(Utils.splitFields(flds)[0]).equals(val)) {
@@ -784,7 +974,7 @@ public class Finder {
                 cur.close();
             }
         }
-        return "n.id in " +  Utils.ids2str(nids);
+        return "n.id in " + Utils.ids2str(nids);
     }
 
 
@@ -821,7 +1011,7 @@ public class Finder {
 
 
     public static int findReplace(Collection col, List<Long> nids, String src, String dst, boolean isRegex,
-            String field, boolean fold) {
+                                  String field, boolean fold) {
         Map<Long, Integer> mmap = new HashMap<>();
         if (field != null) {
             try {
@@ -879,7 +1069,7 @@ public class Finder {
                 if (!flds.equals(origFlds)) {
                     long nid = cur.getLong(0);
                     nids.add(nid);
-                    d.add(new Object[] { flds, Utils.intNow(), col.usn(), nid }); // order based on query below
+                    d.add(new Object[]{flds, Utils.intNow(), col.usn(), nid}); // order based on query below
                 }
             }
         } finally {
@@ -962,9 +1152,9 @@ public class Finder {
      */
     public static List<Pair<String, List<Long>>> findDupes(Collection col, String fieldName, String search) {
         // limit search to notes with applicable field name
-    	if (!TextUtils.isEmpty(search)) {
+        if (!TextUtils.isEmpty(search)) {
             search = "(" + search + ") ";
-    	}
+        }
         search += "'" + fieldName + ":*'";
         // go through notes
         Map<String, List<Long>> vals = new HashMap<>();
@@ -1022,17 +1212,22 @@ public class Finder {
 
     /** Return a list of card ids for QUERY */
     private List<Map<String, String>> _findCardsForCardBrowser(String query, Object _order, Map<String, String> deckNames) {
+        Timber.d("start findCards");
         String[] tokens = _tokenize(query);
+        Timber.d("_tokenize done");
         Pair<String, String[]> res1 = _where(tokens);
+        Timber.d("_where done");
         String preds = res1.first;
         String[] args = res1.second;
         List<Map<String, String>> res = new ArrayList<>();
         if (preds == null) {
             return res;
         }
+        Timber.d("preds done");
         Pair<String, Boolean> res2 = _order instanceof Boolean ? _order((Boolean) _order) : _order((String) _order);
         String order = res2.first;
         boolean rev = res2.second;
+        Timber.d("@FIXME start query");
         String sql = _queryForCardBrowser(preds, order);
         Cursor cur = null;
         try {
@@ -1040,10 +1235,10 @@ public class Finder {
             DeckTask task = DeckTask.getInstance();
             while (cur.moveToNext()) {
                 // cancel if the launching task was cancelled. 
-                if (task.isCancelled()){
+                if (task.isCancelled()) {
                     Timber.i("_findCardsForCardBrowser() cancelled...");
                     return null;
-                }                
+                }
                 Map<String, String> map = new HashMap<>();
                 map.put("id", cur.getString(0));
                 map.put("sfld", cur.getString(1));
@@ -1066,12 +1261,13 @@ public class Finder {
                 cur.close();
             }
         }
+        Timber.d("@FIXME end query");
         if (rev) {
             Collections.reverse(res);
         }
         return res;
     }
-    
+
     /**
      * A copy of _query() with a custom SQL query specific to the AnkiDroid card browser.
      */

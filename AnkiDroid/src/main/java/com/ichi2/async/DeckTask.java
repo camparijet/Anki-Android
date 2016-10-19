@@ -619,12 +619,16 @@ public class DeckTask extends BaseAsyncTask<DeckTask.TaskData, DeckTask.TaskData
         String query = (String) params[0].getObjArray()[1];
         Boolean order = (Boolean) params[0].getObjArray()[2];
         int numCardsToRender = (int) params[0].getObjArray()[3];
+        Timber.d("query start"); // to measure time @TODO please remove it if this request is merged
         List<Map<String,String>> searchResult = col.findCardsForCardBrowser(query, order, deckNames);
+        Timber.d("query end");// to measure time @TODO please remove it if this request is merged
+        Timber.d("render start");// to measure time @TODO please remove it if this request is merged
         // Render the first few items
         for (int i = 0; i < Math.min(numCardsToRender, searchResult.size()); i++) {
             Card c = col.getCard(Long.parseLong(searchResult.get(i).get("id"), 10));
             CardBrowser.updateSearchItemQA(searchResult.get(i), c);
         }
+        Timber.d("render end");
         // Finish off the task
         if (isCancelled()) {
             Timber.d("doInBackgroundSearchCards was cancelled so return null");
