@@ -731,12 +731,13 @@ public class Finder {
      * To solve the performance problem with a large Deck that can happen where every "field" parts in the user's Anki query raises one SQL to check those field.
      * This method will convert all "field" parts in the user's query into one SQL base on models.
      * It also optimize SQL by padding with "delimiter" value in field column in Database
+     *
      * @param field_cmds "field" part in the user's query
      * @return String to limit note id
      */
     private String _findFields(ArrayList<Pair<String, String>> field_cmds) {
         // @TODO order of fields
-        Timber.d("start _findFields");
+        Timber.d("start _findFields");// to measure time @TODO please remove it if this request is merged
 
         Map<Long, int[]> mods = new HashMap<>(); // model-card
         // Map<Long, int[]> modflds = new HashMap<>(); // model-query-fields
@@ -780,15 +781,8 @@ public class Finder {
                                     m_mods[m_mfi] = -1;
                                 }
                                 mods.put(m.getLong("id"), m_mods);
-
-//                                int[] m_mflds = new int[l];
-//                                for (int m_fi = 0; m_fi < m_mflds.length; m_fi++) {
-//                                    m_mflds[m_fi] = -1;
-//                                }
-//                                modflds.put(m.getLong("id"), m_mflds);
                             }
                             mods.get(m.getLong("id"))[f.getInt("ord")] = fci; // card -> field index
-//                            modflds.get(m.getLong("id"))[fci] = f.getInt("ord"); // field -> card index
                         }
                     }
                 }
@@ -796,7 +790,7 @@ public class Finder {
                 throw new RuntimeException(e);
             }
         }
-        Timber.d("end _findFields model");
+        Timber.d("end _findFields model");// to measure time @TODO please remove it if this request is merged
         if (mods.isEmpty()) {
             // nothing has that field
             return null;
@@ -804,8 +798,6 @@ public class Finder {
 
         // generate field-combination
         ArrayList<String[]> field_comb = _mapCombination(_fields);
-
-        // generate model-field combination
 
         // generate query
         String rawSql = "select id, mid from notes where ";
@@ -834,7 +826,7 @@ public class Finder {
 
         LinkedList<Long> nids = new LinkedList<>();
         Cursor cur = null;
-        Timber.d("start _findFields sqlquery");
+        Timber.d("start _findFields sqlquery");// to measure time @TODO please remove it if this request is merged
         try {
             /*
              * Here we use the sqlVal expression, that is required for LIKE syntax in sqllite.
@@ -853,7 +845,7 @@ public class Finder {
                 cur.close();
             }
         }
-        Timber.d("end _findFields sqlquery");
+        Timber.d("end _findFields sqlquery");// to measure time @TODO please remove it if this request is merged
         if (nids.isEmpty()) {
             return "0";
         }
@@ -1257,7 +1249,7 @@ public class Finder {
         }
         return res;
     }
-    
+
     /**
      * A copy of _query() with a custom SQL query specific to the AnkiDroid card browser.
      */
