@@ -628,7 +628,7 @@ public class DeckTask extends BaseAsyncTask<DeckTask.TaskData, DeckTask.TaskData
             Card c = col.getCard(Long.parseLong(searchResult.get(i).get("id"), 10));
             CardBrowser.updateSearchItemQA(searchResult.get(i), c);
         }
-        Timber.d("render end");
+        Timber.d("render end");// to measure time @TODO please remove it if this request is merged
         // Finish off the task
         if (isCancelled()) {
             Timber.d("doInBackgroundSearchCards was cancelled so return null");

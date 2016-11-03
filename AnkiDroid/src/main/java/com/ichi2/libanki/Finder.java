@@ -300,7 +300,7 @@ public class Finder {
                 String[] spl = token.split(":", 2);
                 String cmd = spl[0].toLowerCase(Locale.US);
                 String val = spl[1];
-
+                
                 if (cmd.equals("added")) {
                     s.add(_findAdded(val));
                 } else if (cmd.equals("card")) {
@@ -382,6 +382,7 @@ public class Finder {
      * The python code combines all code paths in one function. In Java, we must overload the method
      * in order to consume either a String (no order, custom order) or a Boolean (no order, built-in order).
      */
+    
     private Pair<String, Boolean> _order(String order) {
         if (TextUtils.isEmpty(order)) {
             return _order(false);
@@ -390,7 +391,7 @@ public class Finder {
             return new Pair<>(" order by " + order, false);
         }
     }
-
+    
     private Pair<String, Boolean> _order(Boolean order) {
         if (!order) {
             return new Pair<>("", false);
@@ -423,8 +424,8 @@ public class Finder {
                 }
             }
             if (sort == null) {
-                // deck has invalid sort order; revert to noteCrt
-                sort = "n.id, c.ord";
+            	// deck has invalid sort order; revert to noteCrt
+            	sort = "n.id, c.ord";
             }
             boolean sortBackwards = mCol.getConf().getBoolean("sortBackwards");
             return new Pair<>(" ORDER BY " + sort, sortBackwards);
@@ -528,7 +529,7 @@ public class Finder {
         try {
             if (prop.equals("ease")) {
                 // LibAnki does this below, but we do it here to avoid keeping a separate float value.
-                val = (int) (Double.parseDouble(sval) * 1000);
+                val = (int)(Double.parseDouble(sval) * 1000);
             } else {
                 val = Integer.parseInt(sval);
             }
@@ -727,16 +728,18 @@ public class Finder {
     }
 
     /**
-     * to solve the perfomance problem when field related anki-filter-query comes, it will convert multiple query into once.
-     * @param field_cmds
-     * @return
+     * To solve the performance problem with a large Deck that can happen where every "field" parts in the user's Anki query raises one SQL to check those field.
+     * This method will convert all "field" parts in the user's query into one SQL base on models.
+     * It also optimize SQL by padding with "delimiter" value in field column in Database
+     * @param field_cmds "field" part in the user's query
+     * @return String to limit note id
      */
     private String _findFields(ArrayList<Pair<String, String>> field_cmds) {
         // @TODO order of fields
         Timber.d("start _findFields");
 
         Map<Long, int[]> mods = new HashMap<>(); // model-card
-    //        Map<Long, int[]> modflds = new HashMap<>(); // model-query-fields
+        // Map<Long, int[]> modflds = new HashMap<>(); // model-query-fields
         // key field name
         // value possible values in the field
         Map<String, ArrayList<String>> _fields = new LinkedHashMap<>();
@@ -857,25 +860,15 @@ public class Finder {
         return "n.id in " + Utils.ids2str(nids);
     }
 
-
-    /**
-     * To limit note-id,this create sql from one Anki-filter-query that filter by Field ( specified in the Note.
-     * @Warning when data is really big like 100M, this part will be bottle-neck.
-     * @param field
-     * @param val
-     * @return
-     * @TODO tunes.
-     * @DONE to make clear why it also runs query
-     */
     private String _findField(String field, String val) {
-        Timber.d("start _findField");
+        Timber.d("start _findField");// to measure time @TODO please remove it if this request is merged
         /*
          * We need two expressions to query the cards: One that will use JAVA REGEX syntax and another
          * that should use SQLITE LIKE clause syntax.
          */
         String sqlVal = val
-                .replace("%", "\\%") // For SQLITE, we escape all % signs
-                .replace("*", "%"); // And then convert the * into non-escaped % signs
+                .replace("%","\\%") // For SQLITE, we escape all % signs
+                .replace("*","%"); // And then convert the * into non-escaped % signs
 
         /*
          * The following three lines make sure that only _ and * are valid wildcards.
@@ -883,36 +876,38 @@ public class Finder {
          * all meta-characters in between them to lose their special meaning
          */
         String javaVal = val
-                .replace("_", "\\E.\\Q")
-                .replace("*", "\\E.*\\Q");
+                    .replace("_","\\E.\\Q")
+                    .replace("*","\\E.*\\Q");
         /*
          * For the pattern, we use the javaVal expression that uses JAVA REGEX syntax
          */
-        Pattern pattern = Pattern.compile("\\Q" + javaVal + "\\E", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);//@TODO not yet understand
-        Timber.d("start _findField model");
+        Pattern pattern = Pattern.compile("\\Q" + javaVal + "\\E", Pattern.CASE_INSENSITIVE | Pattern.DOTALL);
+
+        Timber.d("start _findField model");// to measure time @TODO please remove it if this request is merged
         // find models that have that field
         Map<Long, Object[]> mods = new HashMap<>();
         try {
-            for (JSONObject m : mCol.getModels().all()) { // @FIXME a lot of query....
+            for (JSONObject m : mCol.getModels().all()) {
                 JSONArray flds = m.getJSONArray("flds");
                 for (int fi = 0; fi < flds.length(); ++fi) {
                     JSONObject f = flds.getJSONObject(fi);
                     if (f.getString("name").equalsIgnoreCase(field)) {
-                        mods.put(m.getLong("id"), new Object[]{m, f.getInt("ord")});
+                        mods.put(m.getLong("id"), new Object[] { m, f.getInt("ord") });
                     }
                 }
             }
         } catch (JSONException e) {
             throw new RuntimeException(e);
         }
-        Timber.d("end _findField model");
+
+        Timber.d("end _findField model");// to measure time @TODO please remove it if this request is merged
         if (mods.isEmpty()) {
             // nothing has that field
             return null;
         }
         LinkedList<Long> nids = new LinkedList<>();
         Cursor cur = null;
-        Timber.d("start _findField sqlquery");
+        Timber.d("start _findField sqlquery");// to measure time @TODO please remove it if this request is merged
         try {
             /*
              * Here we use the sqlVal expression, that is required for LIKE syntax in sqllite.
@@ -922,17 +917,13 @@ public class Finder {
             cur = mCol.getDb().getDatabase().rawQuery(
                     "select id, mid, flds from notes where mid in " +
                             Utils.ids2str(new LinkedList<>(mods.keySet())) +
-                            " and flds like ? escape '\\' ", new String[]{"%" + sqlVal + "%"});
-            String d_query = new String("query : " +
-                    "select id, mid, flds from notes where mid in " +
-                    Utils.ids2str(new LinkedList<>(mods.keySet())) +
-                    " and flds like " + "%" + sqlVal + "%" + " escape '\\'");
+                            " and flds like ? escape '\\'", new String[] { "%" + sqlVal + "%" });
 
             while (cur.moveToNext()) {
                 String[] flds = Utils.splitFields(cur.getString(2));
-                int ord = (Integer) mods.get(cur.getLong(1))[1];
+                int ord = (Integer)mods.get(cur.getLong(1))[1];
                 String strg = flds[ord];
-                if (pattern.matcher(strg).matches()) {//@TODO not yet understand... why do we need to match in application layer again ...?
+                if (pattern.matcher(strg).matches()) {
                     nids.add(cur.getLong(0));
                 }
             }
@@ -941,7 +932,7 @@ public class Finder {
                 cur.close();
             }
         }
-        Timber.d("end _findField sqlquery");
+        Timber.d("end _findField sqlquery");// to measure time @TODO please remove it if this request is merged
         if (nids.isEmpty()) {
             return "0";
         }
@@ -963,7 +954,7 @@ public class Finder {
         try {
             cur = mCol.getDb().getDatabase().rawQuery(
                     "select id, flds from notes where mid=? and csum=?",
-                    new String[]{mid, csum});
+                    new String[] { mid, csum });
             long nid = cur.getLong(0);
             String flds = cur.getString(1);
             if (Utils.stripHTMLMedia(Utils.splitFields(flds)[0]).equals(val)) {
@@ -974,7 +965,7 @@ public class Finder {
                 cur.close();
             }
         }
-        return "n.id in " + Utils.ids2str(nids);
+        return "n.id in " +  Utils.ids2str(nids);
     }
 
 
@@ -1011,7 +1002,7 @@ public class Finder {
 
 
     public static int findReplace(Collection col, List<Long> nids, String src, String dst, boolean isRegex,
-                                  String field, boolean fold) {
+            String field, boolean fold) {
         Map<Long, Integer> mmap = new HashMap<>();
         if (field != null) {
             try {
@@ -1069,7 +1060,7 @@ public class Finder {
                 if (!flds.equals(origFlds)) {
                     long nid = cur.getLong(0);
                     nids.add(nid);
-                    d.add(new Object[]{flds, Utils.intNow(), col.usn(), nid}); // order based on query below
+                    d.add(new Object[] { flds, Utils.intNow(), col.usn(), nid }); // order based on query below
                 }
             }
         } finally {
@@ -1152,9 +1143,9 @@ public class Finder {
      */
     public static List<Pair<String, List<Long>>> findDupes(Collection col, String fieldName, String search) {
         // limit search to notes with applicable field name
-        if (!TextUtils.isEmpty(search)) {
+    	if (!TextUtils.isEmpty(search)) {
             search = "(" + search + ") ";
-        }
+    	}
         search += "'" + fieldName + ":*'";
         // go through notes
         Map<String, List<Long>> vals = new HashMap<>();
@@ -1212,22 +1203,21 @@ public class Finder {
 
     /** Return a list of card ids for QUERY */
     private List<Map<String, String>> _findCardsForCardBrowser(String query, Object _order, Map<String, String> deckNames) {
-        Timber.d("start findCards");
+        Timber.d("start findCards");// to measure time @TODO please remove it if this request is merged
         String[] tokens = _tokenize(query);
-        Timber.d("_tokenize done");
+        Timber.d("_tokenize done");// to measure time @TODO please remove it if this request is merged
         Pair<String, String[]> res1 = _where(tokens);
-        Timber.d("_where done");
+        Timber.d("_where done");// to measure time @TODO please remove it if this request is merged
         String preds = res1.first;
         String[] args = res1.second;
         List<Map<String, String>> res = new ArrayList<>();
         if (preds == null) {
             return res;
         }
-        Timber.d("preds done");
         Pair<String, Boolean> res2 = _order instanceof Boolean ? _order((Boolean) _order) : _order((String) _order);
         String order = res2.first;
         boolean rev = res2.second;
-        Timber.d("@FIXME start query");
+        Timber.d("start query for CardBrowser");// to measure time @TODO please remove it if this request is merged
         String sql = _queryForCardBrowser(preds, order);
         Cursor cur = null;
         try {
@@ -1235,10 +1225,10 @@ public class Finder {
             DeckTask task = DeckTask.getInstance();
             while (cur.moveToNext()) {
                 // cancel if the launching task was cancelled. 
-                if (task.isCancelled()) {
+                if (task.isCancelled()){
                     Timber.i("_findCardsForCardBrowser() cancelled...");
                     return null;
-                }
+                }                
                 Map<String, String> map = new HashMap<>();
                 map.put("id", cur.getString(0));
                 map.put("sfld", cur.getString(1));
@@ -1261,13 +1251,13 @@ public class Finder {
                 cur.close();
             }
         }
-        Timber.d("@FIXME end query");
+        Timber.d("end query for CardBrowser");// to measure time @TODO please remove it if this request is merged
         if (rev) {
             Collections.reverse(res);
         }
         return res;
     }
-
+    
     /**
      * A copy of _query() with a custom SQL query specific to the AnkiDroid card browser.
      */
