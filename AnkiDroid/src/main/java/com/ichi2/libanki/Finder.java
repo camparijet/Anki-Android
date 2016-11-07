@@ -835,6 +835,8 @@ public class Finder {
              */
             String[] sqlVal = new String[sqlVals.size()];
             sqlVal = sqlVals.toArray(sqlVal);
+            Timber.d("rawSql :"+rawSql);
+            Timber.d("sqlVal :"+Arrays.toString(sqlVal));
             cur = mCol.getDb().getDatabase().rawQuery(rawSql, sqlVal);
 
             while (cur.moveToNext()) {
